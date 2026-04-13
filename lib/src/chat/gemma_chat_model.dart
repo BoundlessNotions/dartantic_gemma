@@ -194,7 +194,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
   @override
   void dispose() {
     _chat?.close();
-    _model?.close();
+    // Do NOT close _model as it's a shared singleton in flutter_gemma_desktop
     _chat = null;
     _model = null;
     _logger.info('GemmaChatModel disposed');
