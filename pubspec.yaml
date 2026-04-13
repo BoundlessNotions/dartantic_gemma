@@ -1,8 +1,10 @@
 name: dartantic_gemma
-description: Dartantic provider plugin for Flutter Gemma local LLM inference
+description: Dartantic provider plugin enabling local LLM inference using Google's Gemma models via Flutter
 version: 0.1.0
-publish_to: none
+homepage: https://github.com/BoundlessNotions/dartantic_gemma
+repository: https://github.com/BoundlessNotions/dartantic_gemma
 license: BSD-3-Clause
+publish_to: https://pub.dev
 
 environment:
   sdk: ^3.10.0
