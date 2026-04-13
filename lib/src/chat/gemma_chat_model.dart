@@ -28,7 +28,6 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
   final fg.ModelType _modelType;
   final PreferredBackend? _preferredBackend;
   InferenceModel? _model;
-  InferenceChat? _chat;
 
   @override
   Stream<ChatResult<ChatMessage>> sendStream(
@@ -48,51 +47,43 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
         );
       }
 
-      if (_chat == null) {
-        final dartanticTools = tools;
-        List<fg.Tool>? gemmaTools;
+      final dartanticTools = tools;
+      List<fg.Tool>? gemmaTools;
 
-        if (dartanticTools != null && dartanticTools.isNotEmpty) {
-          gemmaTools = dartanticTools
-              .map(
-                (t) => fg.Tool(
-                  name: t.name,
-                  description: t.description,
-                  parameters: _convertSchema(t.inputSchema),
-                ),
-              )
-              .toList();
+      if (dartanticTools != null && dartanticTools.isNotEmpty) {
+        gemmaTools = dartanticTools
+            .map(
+              (t) => fg.Tool(
+                name: t.name,
+                description: t.description,
+                parameters: _convertSchema(t.inputSchema),
+              ),
+            )
+            .toList();
+      }
+
+      final chat = await _model!.createChat(
+        tools: gemmaTools ?? [],
+        supportsFunctionCalls: gemmaTools != null && gemmaTools.isNotEmpty,
+        isThinking: _enableThinking,
+        modelType: _modelType,
+        temperature: temperature ?? 0.8,
+        topK: options?.topK ?? 40,
+        topP: options?.topP,
+        systemInstruction: options?.systemInstruction,
+      );
+
+      try {
+        for (final message in messages) {
+          final gemmaMessage = _convertToGemmaMessage(message);
+          await chat.addQuery(gemmaMessage);
         }
 
-        _chat = await _model!.createChat(
-          tools: gemmaTools ?? [],
-          supportsFunctionCalls: gemmaTools != null && gemmaTools.isNotEmpty,
-          isThinking: _enableThinking,
-          modelType: _modelType,
-          temperature: temperature ?? 0.8,
-          topK: options?.topK ?? 40,
-          topP: options?.topP,
-          systemInstruction: options?.systemInstruction,
-        );
-      }
+        String accumulatedThinking = '';
 
-      for (final message in messages) {
-        final gemmaMessage = _convertToGemmaMessage(message);
-        await _chat!.addQuery(gemmaMessage);
-      }
-
-      String accumulatedThinking = '';
-
-      await for (final response in _chat!.generateChatResponseAsync()) {
-        if (response is fg.ThinkingResponse) {
-          accumulatedThinking += response.content;
-          final parts = accumulatedThinking
-              .split('\n')
-              .map((line) => line.trim())
-              .where((line) => line.isNotEmpty)
-              .toList();
-
-          if (parts.isNotEmpty) {
+        await for (final response in chat.generateChatResponseAsync()) {
+          if (response is fg.ThinkingResponse) {
+            accumulatedThinking += response.content;
             yield ChatResult<ChatMessage>(
               output: ChatMessage(
                 role: ChatMessageRole.model,
@@ -101,56 +92,58 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
               thinking: accumulatedThinking,
               finishReason: FinishReason.unspecified,
             );
+          } else if (response is fg.TextResponse) {
+            yield ChatResult<ChatMessage>(
+              output: ChatMessage(
+                role: ChatMessageRole.model,
+                parts: [TextPart(response.token)],
+              ),
+              thinking: accumulatedThinking.isNotEmpty
+                  ? accumulatedThinking
+                  : null,
+              finishReason: FinishReason.unspecified,
+            );
+          } else if (response is fg.FunctionCallResponse) {
+            yield ChatResult<ChatMessage>(
+              output: ChatMessage(
+                role: ChatMessageRole.model,
+                parts: [
+                  ToolPart.call(
+                    callId: response.name,
+                    toolName: response.name,
+                    arguments: response.args,
+                  ),
+                ],
+              ),
+              thinking: accumulatedThinking.isNotEmpty
+                  ? accumulatedThinking
+                  : null,
+              finishReason: FinishReason.toolCalls,
+            );
+          } else if (response is fg.ParallelFunctionCallResponse) {
+            final toolCallParts = response.calls
+                .map(
+                  (call) => ToolPart.call(
+                    callId: call.name,
+                    toolName: call.name,
+                    arguments: call.args,
+                  ),
+                )
+                .toList();
+            yield ChatResult<ChatMessage>(
+              output: ChatMessage(
+                role: ChatMessageRole.model,
+                parts: toolCallParts,
+              ),
+              thinking: accumulatedThinking.isNotEmpty
+                  ? accumulatedThinking
+                  : null,
+              finishReason: FinishReason.toolCalls,
+            );
           }
-        } else if (response is fg.TextResponse) {
-          yield ChatResult<ChatMessage>(
-            output: ChatMessage(
-              role: ChatMessageRole.model,
-              parts: [TextPart(response.token)],
-            ),
-            thinking: accumulatedThinking.isNotEmpty
-                ? accumulatedThinking
-                : null,
-            finishReason: FinishReason.unspecified,
-          );
-        } else if (response is fg.FunctionCallResponse) {
-          yield ChatResult<ChatMessage>(
-            output: ChatMessage(
-              role: ChatMessageRole.model,
-              parts: [
-                ToolPart.call(
-                  callId: response.name,
-                  toolName: response.name,
-                  arguments: response.args,
-                ),
-              ],
-            ),
-            thinking: accumulatedThinking.isNotEmpty
-                ? accumulatedThinking
-                : null,
-            finishReason: FinishReason.toolCalls,
-          );
-        } else if (response is fg.ParallelFunctionCallResponse) {
-          final toolCallParts = response.calls
-              .map(
-                (call) => ToolPart.call(
-                  callId: call.name,
-                  toolName: call.name,
-                  arguments: call.args,
-                ),
-              )
-              .toList();
-          yield ChatResult<ChatMessage>(
-            output: ChatMessage(
-              role: ChatMessageRole.model,
-              parts: toolCallParts,
-            ),
-            thinking: accumulatedThinking.isNotEmpty
-                ? accumulatedThinking
-                : null,
-            finishReason: FinishReason.toolCalls,
-          );
         }
+      } finally {
+        await chat.close();
       }
 
       _logger.info('Flutter Gemma chat stream completed');
@@ -173,12 +166,14 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
         buffer.write(part.text);
       } else if (part is ToolPart) {
         if (part.kind == ToolPartKind.call) {
+          // Format tool call for Gemma 2
           buffer.write(
             '<start_function_call>call:${part.toolName}{${part.arguments}}<end_function_call>',
           );
         } else if (part.kind == ToolPartKind.result) {
+          // Format tool result for Gemma 2
           final content = part.result?.toString() ?? '';
-          buffer.write('Tool result: $content\n');
+          buffer.write('<start_of_role>tool<end_of_role>\n$content\n');
         }
       } else if (part is ThinkingPart) {
         buffer.write(part.text);
@@ -193,9 +188,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
 
   @override
   void dispose() {
-    _chat?.close();
-    // Do NOT close _model as it's a shared singleton in flutter_gemma_desktop
-    _chat = null;
+    // We no longer cache _chat, so nothing to close here besides clearing the model ref
     _model = null;
     _logger.info('GemmaChatModel disposed');
   }
