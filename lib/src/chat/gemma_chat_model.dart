@@ -16,14 +16,17 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
     bool enableThinking = false,
     required GemmaChatModelOptions defaultOptions,
     fg.ModelType modelType = fg.ModelType.gemmaIt,
+    PreferredBackend? preferredBackend,
   }) : _enableThinking = enableThinking,
        _modelType = modelType,
+       _preferredBackend = preferredBackend,
        super(defaultOptions: defaultOptions, tools: tools);
 
   static final Logger _logger = Logger('dartantic.chat.models.gemma');
 
   final bool _enableThinking;
   final fg.ModelType _modelType;
+  final PreferredBackend? _preferredBackend;
   InferenceModel? _model;
   InferenceChat? _chat;
 
@@ -41,6 +44,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
       if (_model == null) {
         _model = await FlutterGemma.getActiveModel(
           maxTokens: options?.maxTokens ?? defaultOptions.maxTokens ?? 1024,
+          preferredBackend: options?.preferredBackend ?? _preferredBackend,
         );
       }
 
@@ -158,8 +162,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
 
   Map<String, dynamic> _convertSchema(Schema? schema) {
     if (schema == null) return {};
-    final map = schema as Map<String, Object?>;
-    return Map<String, dynamic>.from(map);
+    return Map<String, dynamic>.from(schema.value);
   }
 
   fg.Message _convertToGemmaMessage(ChatMessage message) {

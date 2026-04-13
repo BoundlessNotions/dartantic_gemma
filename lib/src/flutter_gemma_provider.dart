@@ -1,23 +1,13 @@
 import 'dart:async';
 
 import 'package:dartantic_interface/dartantic_interface.dart';
-import 'package:flutter_gemma/core/model.dart' as fg;
-import 'package:flutter_gemma/flutter_gemma.dart' hide Tool;
+import 'package:flutter_gemma/flutter_gemma.dart' as fg hide Tool;
 import 'package:logging/logging.dart';
 
 import 'chat/gemma_chat_model.dart';
 import 'chat/gemma_chat_model_options.dart';
 import 'embeddings/gemma_embeddings_model.dart';
 import 'embeddings/gemma_embeddings_model_options.dart';
-
-class _GemmaMediaGenerationModelOptions implements MediaGenerationModelOptions {
-  const _GemmaMediaGenerationModelOptions();
-}
-
-// Placeholder for unimplemented media generation
-// ignore: unused_element
-const MediaGenerationModelOptions _mediaOptions =
-    _GemmaMediaGenerationModelOptions();
 
 const String _defaultChatModelName = 'gemma-2b-it';
 const String _defaultEmbeddingsModelName = 'embedding-gemma';
@@ -29,30 +19,34 @@ class FlutterGemmaProvider
           GemmaEmbeddingsModelOptions,
           MediaGenerationModelOptions
         > {
-  FlutterGemmaProvider({String? huggingFaceToken})
-    : super(
-        apiKey: huggingFaceToken,
-        apiKeyName: 'HUGGINGFACE_TOKEN',
-        name: 'flutter_gemma',
-        displayName: 'Flutter Gemma',
-        defaultModelNames: {
-          ModelKind.chat: _defaultChatModelName,
-          ModelKind.embeddings: _defaultEmbeddingsModelName,
-        },
-        aliases: const ['gemma', 'fluttergemma'],
-      );
+  FlutterGemmaProvider({
+    String? huggingFaceToken,
+    fg.PreferredBackend? preferredBackend,
+  }) : _preferredBackend = preferredBackend,
+       super(
+         apiKey: huggingFaceToken,
+         apiKeyName: 'HUGGINGFACE_TOKEN',
+         name: 'flutter_gemma',
+         displayName: 'Flutter Gemma',
+         defaultModelNames: {
+           ModelKind.chat: _defaultChatModelName,
+           ModelKind.embeddings: _defaultEmbeddingsModelName,
+         },
+         aliases: const ['gemma', 'fluttergemma'],
+       );
 
   static final Logger _logger = Logger(
     'dartantic.chat.providers.flutter_gemma',
   );
 
+  final fg.PreferredBackend? _preferredBackend;
   bool _initialized = false;
   String? _activeModelId;
   fg.ModelType? _modelType;
 
   @override
   Stream<ModelInfo> listModels() async* {
-    final installedModels = await FlutterGemma.listInstalledModels();
+    final installedModels = await fg.FlutterGemma.listInstalledModels();
     for (final modelId in installedModels) {
       final isInference =
           modelId.contains('gemma') ||
@@ -97,7 +91,8 @@ class FlutterGemmaProvider
       'Creating Flutter Gemma model: $modelName with '
       '${tools?.length ?? 0} tools, '
       'temp: $temperature, '
-      'thinking: $enableThinking',
+      'thinking: $enableThinking, '
+      'backend: ${options?.preferredBackend ?? _preferredBackend}',
     );
 
     return GemmaChatModel(
@@ -107,6 +102,7 @@ class FlutterGemmaProvider
       enableThinking: enableThinking,
       defaultOptions: options ?? const GemmaChatModelOptions(),
       modelType: _modelType ?? fg.ModelType.gemmaIt,
+      preferredBackend: options?.preferredBackend ?? _preferredBackend,
     );
   }
 
@@ -135,7 +131,7 @@ class FlutterGemmaProvider
 
   Future<void> ensureInitialized() async {
     if (!_initialized) {
-      await FlutterGemma.initialize(huggingFaceToken: apiKey);
+      await fg.FlutterGemma.initialize(huggingFaceToken: apiKey);
       _initialized = true;
       _logger.info('FlutterGemma initialized');
     }
@@ -152,7 +148,7 @@ class FlutterGemmaProvider
     _modelType = modelType;
 
     if (modelUrl != null) {
-      await FlutterGemma.installModel(
+      await fg.FlutterGemma.installModel(
         modelType: modelType,
         fileType: fileType,
       ).fromNetwork(modelUrl).withProgress(onProgress ?? (_) {}).install();
