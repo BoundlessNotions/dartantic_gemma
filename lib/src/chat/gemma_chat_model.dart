@@ -169,24 +169,26 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
   }
 
   fg.Message _convertToGemmaMessage(ChatMessage message) {
-    // Rely on the provider's default role mapping rather than custom tags
-    // unless necessary, as most Gemma 2 implementations handle standard
-    // chat role mapping internally in FlutterGemma.
     final buffer = StringBuffer();
     for (final part in message.parts) {
       if (part is TextPart) {
         buffer.write(part.text);
       } else if (part is ToolPart) {
         if (part.kind == ToolPartKind.call) {
-          buffer.write('call:${part.toolName}{${part.arguments}}');
+          // Standard Gemma/Gemma-2 tool call format
+          buffer.write(
+            '<start_of_role>model<end_of_role><start_function_call>call:${part.toolName}{${part.arguments}}<end_function_call>',
+          );
         } else if (part.kind == ToolPartKind.result) {
-          buffer.write('result: ${part.result}');
+          // Standard Gemma/Gemma-2 tool result format
+          final content = part.result?.toString() ?? '';
+          buffer.write('<start_of_role>tool<end_of_role>\n$content\n');
         }
       } else if (part is ThinkingPart) {
         buffer.write(part.text);
       }
     }
-    
+
     return fg.Message(
       text: buffer.toString(),
       isUser: message.role == ChatMessageRole.user,
