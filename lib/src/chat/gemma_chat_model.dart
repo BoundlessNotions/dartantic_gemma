@@ -42,7 +42,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
     try {
       if (_model == null) {
         _model = await FlutterGemma.getActiveModel(
-          maxTokens: options?.maxTokens ?? defaultOptions.maxTokens ?? 1024,
+          maxTokens: options?.maxTokens ?? defaultOptions.maxTokens ?? 16384,
           preferredBackend: options?.preferredBackend ?? _preferredBackend,
         );
       }
@@ -74,6 +74,10 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
       );
 
       try {
+        // Send history + last message as query to the model.
+        // FlutterGemma manages state internally if the model supports it,
+        // but for ReACT loops we ensure the session is fresh and we send
+        // the context via messages.
         for (final message in messages) {
           final gemmaMessage = _convertToGemmaMessage(message);
           await chat.addQuery(gemmaMessage);
@@ -81,7 +85,11 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
 
         String accumulatedThinking = '';
 
+        int toolCallIdCounter = 0;
+
         await for (final response in chat.generateChatResponseAsync()) {
+          FinishReason finishReason = FinishReason.unspecified;
+
           if (response is fg.ThinkingResponse) {
             accumulatedThinking += response.content;
             yield ChatResult<ChatMessage>(
@@ -90,7 +98,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
                 parts: [ThinkingPart(accumulatedThinking)],
               ),
               thinking: accumulatedThinking,
-              finishReason: FinishReason.unspecified,
+              finishReason: finishReason,
             );
           } else if (response is fg.TextResponse) {
             yield ChatResult<ChatMessage>(
@@ -101,15 +109,16 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
               thinking: accumulatedThinking.isNotEmpty
                   ? accumulatedThinking
                   : null,
-              finishReason: FinishReason.unspecified,
+              finishReason: finishReason,
             );
           } else if (response is fg.FunctionCallResponse) {
+            finishReason = FinishReason.toolCalls;
             yield ChatResult<ChatMessage>(
               output: ChatMessage(
                 role: ChatMessageRole.model,
                 parts: [
                   ToolPart.call(
-                    callId: response.name,
+                    callId: 'call_${toolCallIdCounter++}',
                     toolName: response.name,
                     arguments: response.args,
                   ),
@@ -118,13 +127,14 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
               thinking: accumulatedThinking.isNotEmpty
                   ? accumulatedThinking
                   : null,
-              finishReason: FinishReason.toolCalls,
+              finishReason: finishReason,
             );
           } else if (response is fg.ParallelFunctionCallResponse) {
+            finishReason = FinishReason.toolCalls;
             final toolCallParts = response.calls
                 .map(
                   (call) => ToolPart.call(
-                    callId: call.name,
+                    callId: 'call_${toolCallIdCounter++}',
                     toolName: call.name,
                     arguments: call.args,
                   ),
@@ -138,7 +148,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
               thinking: accumulatedThinking.isNotEmpty
                   ? accumulatedThinking
                   : null,
-              finishReason: FinishReason.toolCalls,
+              finishReason: finishReason,
             );
           }
         }
@@ -159,27 +169,24 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
   }
 
   fg.Message _convertToGemmaMessage(ChatMessage message) {
+    // Rely on the provider's default role mapping rather than custom tags
+    // unless necessary, as most Gemma 2 implementations handle standard
+    // chat role mapping internally in FlutterGemma.
     final buffer = StringBuffer();
-
     for (final part in message.parts) {
       if (part is TextPart) {
         buffer.write(part.text);
       } else if (part is ToolPart) {
         if (part.kind == ToolPartKind.call) {
-          // Format tool call for Gemma 2
-          buffer.write(
-            '<start_function_call>call:${part.toolName}{${part.arguments}}<end_function_call>',
-          );
+          buffer.write('call:${part.toolName}{${part.arguments}}');
         } else if (part.kind == ToolPartKind.result) {
-          // Format tool result for Gemma 2
-          final content = part.result?.toString() ?? '';
-          buffer.write('<start_of_role>tool<end_of_role>\n$content\n');
+          buffer.write('result: ${part.result}');
         }
       } else if (part is ThinkingPart) {
         buffer.write(part.text);
       }
     }
-
+    
     return fg.Message(
       text: buffer.toString(),
       isUser: message.role == ChatMessageRole.user,
@@ -188,7 +195,6 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
 
   @override
   void dispose() {
-    // We no longer cache _chat, so nothing to close here besides clearing the model ref
     _model = null;
     _logger.info('GemmaChatModel disposed');
   }
