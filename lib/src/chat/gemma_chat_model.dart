@@ -167,33 +167,26 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
     if (schema == null) return {};
     return Map<String, dynamic>.from(schema.value);
   }
-
-  fg.Message _convertToGemmaMessage(ChatMessage message) {
-    final buffer = StringBuffer();
-    for (final part in message.parts) {
-      if (part is TextPart) {
-        buffer.write(part.text);
-      } else if (part is ToolPart) {
-        if (part.kind == ToolPartKind.call) {
-          // Standard Gemma/Gemma-2 tool call format
-          buffer.write(
-            '<start_of_role>model<end_of_role><start_function_call>call:${part.toolName}{${part.arguments}}<end_function_call>',
-          );
-        } else if (part.kind == ToolPartKind.result) {
-          // Standard Gemma/Gemma-2 tool result format
-          final content = part.result?.toString() ?? '';
-          buffer.write('<start_of_role>tool<end_of_role>\n$content\n');
-        }
-      } else if (part is ThinkingPart) {
-        buffer.write(part.text);
+fg.Message _convertToGemmaMessage(ChatMessage message) {
+  final buffer = StringBuffer();
+  for (final part in message.parts) {
+    if (part is TextPart) {
+      buffer.write(part.text);
+    } else if (part is ToolPart) {
+      if (part.kind == ToolPartKind.result) {
+        buffer.write(part.result.toString());
       }
+    } else if (part is ThinkingPart) {
+      buffer.write(part.text);
     }
-
-    return fg.Message(
-      text: buffer.toString(),
-      isUser: message.role == ChatMessageRole.user,
-    );
   }
+
+  return fg.Message(
+    text: buffer.toString(),
+    isUser: message.role == ChatMessageRole.user,
+  );
+}
+
 
   @override
   void dispose() {
