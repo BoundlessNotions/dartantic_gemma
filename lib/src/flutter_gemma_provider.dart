@@ -9,6 +9,11 @@ import 'chat/gemma_chat_model_options.dart';
 import 'embeddings/gemma_embeddings_model.dart';
 import 'embeddings/gemma_embeddings_model_options.dart';
 
+void _ensureLogging() {
+  Logger.root.level = Level.INFO;
+  hierarchicalLoggingEnabled = true;
+}
+
 const String _defaultChatModelName = 'gemma-2b-it';
 const String _defaultEmbeddingsModelName = 'embedding-gemma';
 
@@ -131,6 +136,7 @@ class FlutterGemmaProvider
 
   Future<void> ensureInitialized() async {
     if (!_initialized) {
+      _ensureLogging();
       await fg.FlutterGemma.initialize(huggingFaceToken: apiKey);
       _initialized = true;
       _logger.info('FlutterGemma initialized');

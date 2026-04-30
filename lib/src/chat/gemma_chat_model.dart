@@ -6,6 +6,7 @@ import 'package:flutter_gemma/flutter_gemma.dart' hide Tool;
 import 'package:flutter_gemma/core/tool.dart' as fg;
 import 'package:logging/logging.dart';
 
+import '../parsing/gemma4_tool_parser.dart';
 import 'gemma_chat_model_options.dart';
 
 class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
@@ -22,7 +23,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
        _preferredBackend = preferredBackend,
        super(defaultOptions: defaultOptions, tools: tools);
 
-  static final Logger _logger = Logger('dartantic.chat.models.gemma');
+  static final Logger _logger = Logger('dartantic.gemma');
 
   final bool _enableThinking;
   final fg.ModelType _modelType;
@@ -35,9 +36,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
     GemmaChatModelOptions? options,
     Schema? outputSchema,
   }) async* {
-    _logger.info(
-      'Starting Flutter Gemma chat stream with ${messages.length} messages',
-    );
+    _logger.warning('[SEND] ${messages.length} msgs');
 
     try {
       if (_model == null) {
@@ -65,6 +64,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
       final chat = await _model!.createChat(
         tools: gemmaTools ?? [],
         supportsFunctionCalls: gemmaTools != null && gemmaTools.isNotEmpty,
+        toolChoice: fg.ToolChoice.auto,
         isThinking: _enableThinking,
         modelType: _modelType,
         temperature: temperature ?? 0.8,
@@ -74,17 +74,13 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
       );
 
       try {
-        // Send history + last message as query to the model.
-        // FlutterGemma manages state internally if the model supports it,
-        // but for ReACT loops we ensure the session is fresh and we send
-        // the context via messages.
         for (final message in messages) {
           final gemmaMessage = _convertToGemmaMessage(message);
           await chat.addQuery(gemmaMessage);
         }
 
         String accumulatedThinking = '';
-
+        final textBuffer = StringBuffer();
         int toolCallIdCounter = 0;
 
         await for (final response in chat.generateChatResponseAsync()) {
@@ -101,6 +97,34 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
               finishReason: finishReason,
             );
           } else if (response is fg.TextResponse) {
+            textBuffer.write(response.token);
+
+            final currentBuffer = textBuffer.toString();
+            if (Gemma4ToolParser.hasToolCall(currentBuffer)) {
+              final toolCalls = Gemma4ToolParser.parseAll(currentBuffer);
+              if (toolCalls.isNotEmpty) {
+                _logger.warning(
+                  '[TOOL] ${toolCalls.map((t) => t.name).join(", ")}',
+                );
+                for (final tc in toolCalls) {
+                  finishReason = FinishReason.toolCalls;
+                  yield ChatResult<ChatMessage>(
+                    output: ChatMessage(
+                      role: ChatMessageRole.model,
+                      parts: [
+                        ToolPart.call(
+                          callId: 'call_${toolCallIdCounter++}',
+                          toolName: tc.name,
+                          arguments: tc.args,
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                continue;
+              }
+            }
+
             yield ChatResult<ChatMessage>(
               output: ChatMessage(
                 role: ChatMessageRole.model,
@@ -113,6 +137,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
             );
           } else if (response is fg.FunctionCallResponse) {
             finishReason = FinishReason.toolCalls;
+            _logger.warning('[TOOL] ${response.name}');
             yield ChatResult<ChatMessage>(
               output: ChatMessage(
                 role: ChatMessageRole.model,
@@ -131,6 +156,7 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
             );
           } else if (response is fg.ParallelFunctionCallResponse) {
             finishReason = FinishReason.toolCalls;
+            _logger.warning('[TOOL] ${response.calls.length} parallel');
             final toolCallParts = response.calls
                 .map(
                   (call) => ToolPart.call(
@@ -156,9 +182,9 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
         await chat.close();
       }
 
-      _logger.info('Flutter Gemma chat stream completed');
+      _logger.warning('[DONE]');
     } catch (e, stackTrace) {
-      _logger.warning('Flutter Gemma chat stream error: $e', e, stackTrace);
+      _logger.severe('[ERROR] $e', e, stackTrace);
       rethrow;
     }
   }
@@ -167,30 +193,30 @@ class GemmaChatModel extends ChatModel<GemmaChatModelOptions> {
     if (schema == null) return {};
     return Map<String, dynamic>.from(schema.value);
   }
-fg.Message _convertToGemmaMessage(ChatMessage message) {
-  final buffer = StringBuffer();
-  for (final part in message.parts) {
-    if (part is TextPart) {
-      buffer.write(part.text);
-    } else if (part is ToolPart) {
-      if (part.kind == ToolPartKind.result) {
-        buffer.write(part.result.toString());
+
+  fg.Message _convertToGemmaMessage(ChatMessage message) {
+    final buffer = StringBuffer();
+    for (final part in message.parts) {
+      if (part is TextPart) {
+        buffer.write(part.text);
+      } else if (part is ToolPart) {
+        if (part.kind == ToolPartKind.result) {
+          buffer.write(part.result.toString());
+        }
+      } else if (part is ThinkingPart) {
+        buffer.write(part.text);
       }
-    } else if (part is ThinkingPart) {
-      buffer.write(part.text);
     }
+
+    return fg.Message(
+      text: buffer.toString(),
+      isUser: message.role == ChatMessageRole.user,
+    );
   }
-
-  return fg.Message(
-    text: buffer.toString(),
-    isUser: message.role == ChatMessageRole.user,
-  );
-}
-
 
   @override
   void dispose() {
     _model = null;
-    _logger.info('GemmaChatModel disposed');
+    _logger.fine('disposed');
   }
 }
