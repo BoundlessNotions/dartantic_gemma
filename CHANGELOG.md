@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-26
+- Updated flutter_gemma dependency to ^0.16.0 for latest native FFI improvements
+- NPU dispatch now available on Linux/macOS alongside Windows
+- Desktop storage updated to use Application Support instead of Documents
+- Support for qdrant-edge vector store (replaces sqlite + local_hnsw)
+
 ## [0.2.4] - 2026-04-30
 - Added handling of Gemma 4 tool calling format parsing to properly register function executions
 - Update minimum flutter_gemma version to ^0.14.0
